@@ -1,0 +1,14 @@
+{
+  "os": "reactos",
+  "releases": [
+    {
+      "tag": "0.4.15-i386",
+      "release": "0.4.15",
+      "arch": "i386",
+      "sync": "",
+      "shutdown": "shutdown /p",
+      "desktop": false,
+      "build": true
+    }
+  ]
+}

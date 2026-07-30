@@ -1,0 +1,89 @@
+; ReactOS unattended-setup answer file for the anyvm builder.
+;
+; hooks/host_beforeBuild.sh drops this into the remastered bootcd as
+; \reactos\unattend.inf -- the path first stage looks at (SourcePath +
+; "unattend.inf", base/setup/lib/setuplib.c). First stage copies the file
+; on to %SystemRoot%\system32\$winnt$.inf, which is where second stage
+; (dll/win32/syssetup/wizard.c, GetSetupInfPath) picks the same sections up
+; again.
+;
+; Every key below was read out of the ReactOS sources rather than from a
+; sample file found on the web:
+;   base/setup/lib/setuplib.c    -- CheckUnattendedSetup(): Signature must
+;     equal "$ReactOS$" and UnattendSetupEnabled must equal "yes" (both
+;     compared with _wcsicmp), plus DestinationDiskNumber,
+;     DestinationPartitionNumber, InstallationDirectory, BootLoaderLocation,
+;     FormatPartition, AutoPartition, LocaleID, FsType.
+;   dll/win32/syssetup/wizard.c  -- second stage: FullName, OrgName,
+;     ComputerName, AdminPassword, TimeZoneIndex, DisableAutoDaylightTimeSet,
+;     RappsDownload, InstallationType, and the [GuiRunOnce] section.
+;
+; BootLoaderLocation and FsType are deliberately NOT set. They are read as
+; bare integers and the sources do not define the accepted values in the
+; parsing code, so a guessed number could silently install the boot loader
+; somewhere useless or format the volume as something the builder does not
+; expect. Leaving them out keeps usetup's own defaults (boot loader on the
+; system partition, first file system in the list = FAT).
+;
+; LocaleID, by contrast, IS required in practice even though setuplib.c
+; treats it as optional. Leaving it out cost a whole build: first stage ran
+; unattended all the way through partitioning, formatting and the file copy,
+; then died on a modal "Setup failed to add keyboard layouts to the registry
+; / ENTER = Reboot computer" box that unattended mode does NOT dismiss, and
+; sat there until the installOpts bound fired. The reason is in usetup.c: in
+; unattended mode SelectedLanguageId comes from USetupData.LocaleID and the
+; keyboard layout is then picked by matching it against the layout list
+; (`if (!_wcsicmp(USetupData.LocaleID, LocaleId))`). With LocaleID empty
+; nothing ever matches, so no layout is selected and the registry step has
+; nothing to write.
+
+[Unattend]
+Signature = "$ReactOS$"
+UnattendSetupEnabled = "yes"
+
+; Single 16 G IDE disk (VM_DISK_SIZE in the conf), one partition covering
+; it, formatted every time -- the build always starts from a blank qcow2.
+DestinationDiskNumber = 0
+DestinationPartitionNumber = 1
+AutoPartition = 1
+FormatPartition = 1
+InstallationDirectory = "ReactOS"
+
+; 00000409 -- verified present in BOTH the [Language] ("English (United
+; States)") and [KeyboardLayout] ("English (USA)") sections of this exact
+; release's \reactos\txtsetup.sif, which is the table usetup matches against.
+LocaleID = "00000409"
+
+FullName = "anyvm"
+OrgName = "anyvm.org"
+ComputerName = "reactos"
+
+; The builder-wide convention (see the other anyvm builders): the guest's
+; administrative password is the project name. Nothing depends on it here
+; -- anyvmtd authenticates nobody and the guest is reachable only through
+; the loopback-bound hostfwd -- but a human debugging a red build over VNC
+; needs to be able to log in.
+AdminPassword = "anyvm.org"
+
+; Runs once at the end of second stage, and it is the ONLY way the telnet
+; channel gets registered -- doing it offline from the host is impossible
+; (see the header of files/inject.sh for the hivex/ReactOS hive
+; incompatibility). The executable itself is already on the disk by then;
+; inject.sh put it there while the image was offline.
+; NOTE THE FORM: a bare quoted command with NO "Command0 =" key. That is
+; not a style choice. ProcessUnattendSection() reads each line of this
+; section with SetupGetStringFieldW(&InfContext, 0, ...) -- FIELD 0, which
+; setupapi defines as the line's KEY. Written as `Command0 = "..."` the key
+; is the string "Command0", so that useless word is what would get stored,
+; never the path. A keyless single-field line works because the parser
+; promotes it (dll/win32/setupapi/parser.c: `if (cur_line->nb_fields == 1
+; && cur_line->key_field == -1) cur_line->key_field = cur_line->first_field;`).
+;
+; And note what this section does NOT do: it never executes anything.
+; ProcessUnattendSection just copies each entry into
+; HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce as values named
+; "0", "1", ... The command actually runs at the first interactive logon,
+; which happens because the same unattend turns on AutoAdminLogon (verified
+; in the built image: AutoAdminLogon="1", DefaultUserName="Administrator").
+[GuiRunOnce]
+"C:\anyvm\anyvminst.cmd"
