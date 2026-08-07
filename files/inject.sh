@@ -78,6 +78,12 @@ echo "--- copying the anyvm payload ---"
 sudo mkdir -p "$MNT/anyvm"
 sudo cp "$WORK/anyvmtd.exe"   "$MNT/anyvm/anyvmtd.exe"
 sudo cp "$WORK/anyvminst.cmd" "$MNT/anyvm/anyvminst.cmd"
+# busybox-w32: the guest tar for --sync tar (fetched + checksummed by
+# host_beforeBuild.sh). Two copies on purpose: busybox dispatches applets
+# by argv[0], so the tar.exe copy IS tar with no wrapper needed, while
+# busybox.exe keeps the full toolbox reachable for debugging.
+sudo cp "$WORK/busybox.exe" "$MNT/anyvm/busybox.exe"
+sudo cp "$WORK/busybox.exe" "$MNT/anyvm/tar.exe"
 sudo ls -l "$MNT/anyvm"
 
 echo "--- NOT registering the service offline (see the header) ---"

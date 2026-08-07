@@ -5,7 +5,7 @@
       "tag": "0.4.15-i386",
       "release": "0.4.15",
       "arch": "i386",
-      "sync": "",
+      "sync": "tar",
       "shutdown": "shutdown /p",
       "desktop": false,
       "build": true

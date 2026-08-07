@@ -159,6 +159,28 @@ static int send_all(SOCKET s, const char *buf, int len)
 }
 
 /*
+ * Child output -> socket, with telnet framing kept honest: a literal 0xFF
+ * data byte MUST go out as the doubled IAC IAC escape (RFC 854), exactly
+ * the inverse of what iac_filter() undoes on the inbound side. Without
+ * this, binary child output (the tar-sync pull streams an archive through
+ * here) hits the host-side IAC parser and gets eaten or misread as
+ * negotiation. Text output never contains 0xFF, so nothing else changes.
+ */
+static int send_iac_escaped(SOCKET s, const unsigned char *buf, int len)
+{
+    static unsigned char esc[IO_BUF * 2];
+    int i;
+    int n = 0;
+
+    for (i = 0; i < len; i++) {
+        if (buf[i] == TN_IAC)
+            esc[n++] = TN_IAC;
+        esc[n++] = buf[i];
+    }
+    return send_all(s, (const char *)esc, n);
+}
+
+/*
  * Run one cmd.exe against one socket. Both pipes are polled rather than
  * threaded: PeekNamedPipe for the child's output, select() for the
  * socket. Anonymous pipes cannot be used with select/WaitForSingleObject,
@@ -180,6 +202,7 @@ static void serve_conn(SOCKET s)
     struct timeval tv;
     fd_set rfds;
     int rc, n;
+    int stdin_eof = 0;
 
     sa.nLength = sizeof(sa);
     sa.lpSecurityDescriptor = NULL;
@@ -223,26 +246,49 @@ static void serve_conn(SOCKET s)
             want = (avail > sizeof(outbuf)) ? sizeof(outbuf) : avail;
             if (!ReadFile(out_rd, outbuf, want, &got, NULL) || got == 0)
                 break;
-            if (send_all(s, outbuf, (int)got) != 0)
+            if (send_iac_escaped(s, (const unsigned char *)outbuf,
+                                 (int)got) != 0)
                 break;
             continue;
         }
 
         /* socket -> child */
-        FD_ZERO(&rfds);
-        FD_SET(s, &rfds);
-        tv.tv_sec = 0;
-        tv.tv_usec = 50000;     /* 50 ms */
-        n = select(0, &rfds, NULL, NULL, &tv);
-        if (n == SOCKET_ERROR)
-            break;
-        if (n > 0) {
-            rc = recv(s, (char *)raw, sizeof(raw), 0);
-            if (rc <= 0)
+        if (!stdin_eof) {
+            FD_ZERO(&rfds);
+            FD_SET(s, &rfds);
+            tv.tv_sec = 0;
+            tv.tv_usec = 50000; /* 50 ms */
+            n = select(0, &rfds, NULL, NULL, &tv);
+            if (n == SOCKET_ERROR)
                 break;
-            rc = iac_filter(s, raw, rc, clean);
-            if (rc > 0 && !WriteFile(in_wr, clean, (DWORD)rc, &wrote, NULL))
-                break;
+            if (n > 0) {
+                rc = recv(s, (char *)raw, sizeof(raw), 0);
+                if (rc < 0)
+                    break;
+                if (rc == 0) {
+                    /*
+                     * The peer half-closed its send side (tar sync does
+                     * this after streaming an archive: it is the child's
+                     * stdin EOF). Close the pipe so the child sees EOF,
+                     * but KEEP pumping its remaining output -- the whole
+                     * point of the half-close is that the client still
+                     * wants the completion marker the child prints on the
+                     * way out. A full close by the peer lands here too;
+                     * the next send() then fails and ends the loop.
+                     */
+                    stdin_eof = 1;
+                    if (in_wr != NULL) {
+                        CloseHandle(in_wr);
+                        in_wr = NULL;
+                    }
+                    continue;
+                }
+                rc = iac_filter(s, raw, rc, clean);
+                if (rc > 0 && !WriteFile(in_wr, clean, (DWORD)rc, &wrote, NULL))
+                    break;
+            }
+        } else {
+            Sleep(50);          /* pace the output polling after EOF */
         }
 
         if (g_stop)

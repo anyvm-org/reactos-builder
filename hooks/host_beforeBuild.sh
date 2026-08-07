@@ -51,6 +51,26 @@ i686-w64-mingw32-gcc -O2 -Wall -Wextra -static \
 cp "$FILES/anyvminst.cmd" "$WORK/anyvminst.cmd"
 ls -l "$WORK/anyvmtd.exe"
 
+echo "=== reactos beforeBuild: fetching busybox-w32 (guest tar for --sync tar) ==="
+# ReactOS ships no archiver at all (no tar/zip; extrac32 is extract-only
+# CAB and certutil is a -hashfile stub), so the tar sync method needs a
+# guest-side tar and busybox-w32 provides one: a single static PE32,
+# GPL-licensed like ReactOS itself, verified to run there (uname reports
+# Windows_NT reactos 5.2 3790 i686). Pinned build + sha256 so the image
+# is reproducible; frippery.org rejects botlike user agents, hence -A.
+BUSYBOX_VER="FRP-6075-g169694ebd"
+BUSYBOX_SHA256="7bfee530965315665044e6e01db58125f2763c8a39c2e72ba1a6beb6923e0e1f"
+BUSYBOX_URL="https://frippery.org/files/busybox/busybox-w32-${BUSYBOX_VER}.exe"
+if [ ! -f "$WORK/busybox.exe" ] \
+   || ! echo "$BUSYBOX_SHA256  $WORK/busybox.exe" | sha256sum -c --quiet -; then
+    curl -fSL --retry 5 --retry-delay 5 \
+         -A "Mozilla/5.0 (X11; Linux x86_64)" \
+         -o "$WORK/busybox.exe.part" "$BUSYBOX_URL"
+    echo "$BUSYBOX_SHA256  $WORK/busybox.exe.part" | sha256sum -c -
+    mv "$WORK/busybox.exe.part" "$WORK/busybox.exe"
+fi
+ls -l "$WORK/busybox.exe"
+
 echo "=== reactos beforeBuild: fetching upstream bootcd ==="
 if [ ! -f "$ZIP" ]; then
     curl -fSL --retry 5 --retry-delay 5 -o "$ZIP.part" "$VM_ISO_LINK"
