@@ -14,13 +14,16 @@ All the supported releases are here:
 
 | Release | i386 (x86 32-bit) |
 |---------|---------|
-| 0.4.15 | ✅ |
+| 0.4.15 | ✅ (tar) |
 
 <!-- arch-label: i386 = i386 (x86 32-bit) -->
 
 > **Note:** ReactOS support is a **tech preview**. Remote command execution
-> works; file sync does not exist yet, which is why the table cell carries no
-> sync methods.
+> works, and file sync works via `tar` streamed over the same telnet channel:
+> ReactOS ships no archiver of its own, so the builder bakes **busybox-w32**
+> (a single static GPL PE32, verified to run on ReactOS) at `C:\anyvm\tar.exe`
+> and the host streams a ustar archive down the connection in both
+> directions (`anyvmtd` escapes outbound IAC so the binary stream survives).
 >
 > ReactOS ships no remote-access server of any kind -- `base/applications/network`
 > has a telnet *client*, and the rapps database offers only PuTTY and WinSCP,
@@ -47,9 +50,9 @@ All the supported releases are here:
 > and `net use Z: \\<host>\<export>` fails with System error 2 against an
 > export the guest can ping. That is a ReactOS bug, not a builder gap.
 >
-> So the two live candidates both need code: drive the guest's `ftp` client
-> (present) from a host-side FTP server in anyvm.py, or extend `anyvmtd` with
-> a put/get protocol plus a matching anyvm.py sync method.
+> (The other candidates that would have needed new code -- driving the guest's
+> `ftp`/`ncftp` client from a host-side FTP server, or a put/get protocol in
+> `anyvmtd` -- are superseded by the tar stream.)
 
 > **Note:** 0.4.15 (2025-03-21) is the newest ReactOS *release*, and x86
 > 32-bit is the only architecture it ships. Newer-looking tags in the
