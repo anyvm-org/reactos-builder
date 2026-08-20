@@ -97,36 +97,77 @@ static void logmsg(const char *fmt, ...)
  * Subnegotiation (IAC SB ... IAC SE) is skipped wholesale. A doubled
  * IAC IAC is the escape for a literal 255 byte.
  */
+/*
+ * `carry` holds the tail of a telnet sequence that was cut in half by the
+ * recv boundary, so the next call can finish parsing it. Dropping it -- as
+ * this did -- silently corrupts binary input: an escaped literal 0xFF is the
+ * two-byte sequence IAC IAC, so when a pair straddles two reads the first
+ * half went missing and the next buffer began with a lone IAC, which was
+ * then read as the start of a NEW command and swallowed the byte after it.
+ * A tar stream carrying random data hits this roughly once per 256 bytes of
+ * boundary luck, which is why the push failed intermittently at 3 MB with
+ * "invalid tar magic" while small text payloads always worked. The host side
+ * had the identical defect in _telnet_eat_iac and is fixed the same way.
+ */
 static int iac_filter(SOCKET s, const unsigned char *in, int len,
-                      unsigned char *out)
+                      unsigned char *out,
+                      unsigned char *carry, int *carry_len)
 {
+    static unsigned char joined[IO_BUF + 4];
     int i = 0;
     int n = 0;
     unsigned char reply[3];
+
+    if (*carry_len > 0) {
+        /* Re-parse the held bytes together with the new chunk. */
+        int c = *carry_len;
+        if (c + len > (int)sizeof(joined))
+            c = 0;              /* cannot happen for a 2-3 byte carry */
+        if (c > 0) {
+            memcpy(joined, carry, (size_t)c);
+            memcpy(joined + c, in, (size_t)len);
+            in = joined;
+            len += c;
+        }
+        *carry_len = 0;
+    }
 
     while (i < len) {
         if (in[i] != TN_IAC) {
             out[n++] = in[i++];
             continue;
         }
-        if (i + 1 >= len)
-            break;              /* truncated command; drop it */
+        if (i + 1 >= len) {
+            carry[0] = TN_IAC;  /* incomplete: finish it next time */
+            *carry_len = 1;
+            break;
+        }
         if (in[i + 1] == TN_IAC) {
             out[n++] = TN_IAC;  /* escaped literal 0xFF */
             i += 2;
             continue;
         }
         if (in[i + 1] == TN_SB) {
-            i += 2;
-            while (i + 1 < len && !(in[i] == TN_IAC && in[i + 1] == TN_SE))
-                i++;
-            i += 2;
+            int j = i + 2;
+            while (j + 1 < len && !(in[j] == TN_IAC && in[j + 1] == TN_SE))
+                j++;
+            if (j + 1 >= len) {
+                carry[0] = TN_IAC; /* IAC SE not here yet */
+                carry[1] = TN_SB;
+                *carry_len = 2;
+                break;
+            }
+            i = j + 2;
             continue;
         }
         if (in[i + 1] == TN_DO || in[i + 1] == TN_DONT ||
             in[i + 1] == TN_WILL || in[i + 1] == TN_WONT) {
-            if (i + 2 >= len)
+            if (i + 2 >= len) {
+                carry[0] = TN_IAC;
+                carry[1] = in[i + 1];
+                *carry_len = 2;
                 break;
+            }
             reply[0] = TN_IAC;
             reply[1] = (in[i + 1] == TN_DO || in[i + 1] == TN_DONT)
                        ? TN_WONT : TN_DONT;
@@ -233,6 +274,8 @@ static void serve_conn(SOCKET s)
     fd_set rfds;
     int rc, n;
     int stdin_eof = 0;
+    unsigned char iac_carry[4];   /* half a telnet sequence, see iac_filter */
+    int iac_carry_len = 0;
 
     sa.nLength = sizeof(sa);
     sa.lpSecurityDescriptor = NULL;
@@ -313,7 +356,7 @@ static void serve_conn(SOCKET s)
                     }
                     continue;
                 }
-                rc = iac_filter(s, raw, rc, clean);
+                rc = iac_filter(s, raw, rc, clean, iac_carry, &iac_carry_len);
                 if (rc > 0 && write_all(in_wr, clean, rc) != 0)
                     break;
             }
