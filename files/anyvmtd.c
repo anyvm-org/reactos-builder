@@ -144,6 +144,36 @@ static int iac_filter(SOCKET s, const unsigned char *in, int len,
 /* connection handling                                                */
 /* ------------------------------------------------------------------ */
 
+/*
+ * A pipe write is not all-or-nothing. WriteFile can report success having
+ * taken FEWER bytes than asked for -- which is what happens here whenever
+ * the child stops draining: tar writing a multi-megabyte member to disk
+ * fills the pipe buffer, the write comes back short, and every byte past
+ * `wrote` is gone. The stream then resumes mid-member, so every following
+ * tar header lands misaligned and the child dies on "invalid tar magic".
+ *
+ * Measured on a live guest before this loop existed: pushing four members
+ * totalling 2.45 MB failed every time while the same 2.45 MB as ONE member
+ * went through, and the payload's CONTENT made no difference (random bytes
+ * of the same sizes failed identically) -- the signature of lost bytes, not
+ * of anything the data says. The socket direction already loops in
+ * send_all(); this is its missing counterpart.
+ */
+static int write_all(HANDLE h, const unsigned char *buf, int len)
+{
+    int done = 0;
+    DWORD n;
+
+    while (done < len) {
+        if (!WriteFile(h, buf + done, (DWORD)(len - done), &n, NULL))
+            return -1;
+        if (n == 0)
+            return -1;
+        done += (int)n;
+    }
+    return 0;
+}
+
 static int send_all(SOCKET s, const char *buf, int len)
 {
     int sent = 0;
@@ -198,7 +228,7 @@ static void serve_conn(SOCKET s)
     unsigned char raw[IO_BUF];
     unsigned char clean[IO_BUF];
     char outbuf[IO_BUF];
-    DWORD avail, want, got, wrote;
+    DWORD avail, want, got;
     struct timeval tv;
     fd_set rfds;
     int rc, n;
@@ -284,7 +314,7 @@ static void serve_conn(SOCKET s)
                     continue;
                 }
                 rc = iac_filter(s, raw, rc, clean);
-                if (rc > 0 && !WriteFile(in_wr, clean, (DWORD)rc, &wrote, NULL))
+                if (rc > 0 && write_all(in_wr, clean, rc) != 0)
                     break;
             }
         } else {
