@@ -19,7 +19,11 @@
 #
 # So a candidate has to clear three bars, not one:
 #   * draft = false and prerelease = false;
-#   * it carries an installable asset -- a "*-iso.zip" (the bootcd). The
+#   * it carries an installable asset -- a .zip that is not a press kit,
+#     a live image or a symbol/debug drop. (Do NOT narrow this to a
+#     "-iso.zip" suffix: 0.4.16 renamed the asset to
+#     ReactOS-0.4.16-i386.zip and such a filter reports the PREVIOUS
+#     release forever, silently.) The
 #     0.4.11 .. 0.4.14 releases are real and final yet ship no media at
 #     all through GitHub, and a release this builder cannot download is
 #     not a release it can build;
@@ -49,7 +53,17 @@ TIMEOUT = 60
 USER_AGENT = "anyvm-org-upstream-watcher/1.0"
 
 TAG_RE = re.compile(r"^(\d+(?:\.\d+)+)(?:-release)?$")
-ASSET_RE = re.compile(r"-iso\.zip$", re.I)
+# Installable media, under EITHER naming convention upstream has used:
+#   0.4.15 and earlier: ReactOS-0.4.15-release-1-gdbb43bbaeb2-x86-iso.zip
+#   0.4.16 and later:   ReactOS-0.4.16-i386.zip
+# Keying on the old "-iso.zip" suffix alone made 0.4.16 invisible for
+# three days after release: the hook fell back to the newest release that
+# still had that suffix and reported 0.4.15, i.e. a SILENT false negative.
+# So the rule is now "a .zip that is not one of the known non-media
+# artefacts" -- which still rejects 0.4.10's PressKit.zip and still
+# rejects 0.4.11..0.4.14, which ship no assets at all.
+ASSET_RE = re.compile(r"\.zip$", re.I)
+ASSET_REJECT_RE = re.compile(r"(presskit|-live|symbols|debug)", re.I)
 
 
 def resolve_natural_key():
@@ -133,7 +147,9 @@ def main():
         if not m:
             continue
         assets = rel.get("assets") or []
-        if not any(ASSET_RE.search(a.get("name") or "") for a in assets):
+        if not any(ASSET_RE.search(a.get("name") or "")
+                   and not ASSET_REJECT_RE.search(a.get("name") or "")
+                   for a in assets):
             continue
         versions.append(m.group(1))
 

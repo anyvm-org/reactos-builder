@@ -2,8 +2,10 @@
 
 | Release | i386 (x86 32-bit) |
 |---------|---------|
+| 0.4.16 | ✅ (tar) |
 | 0.4.15 | ✅ (tar) |
 
+<!-- url-template: VM_ISO_LINK = https://github.com/reactos/reactos/releases/download/{V}-release/ReactOS-{V}-i386.zip -->
 <!-- arch-label: i386 = i386 (x86 32-bit) -->
 
 > **Note:** ReactOS support is a **tech preview**. Remote command execution

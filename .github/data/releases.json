@@ -9,6 +9,15 @@
       "shutdown": "shutdown /p",
       "desktop": false,
       "build": true
+    },
+    {
+      "tag": "0.4.16-i386",
+      "release": "0.4.16",
+      "arch": "i386",
+      "sync": "tar",
+      "shutdown": "shutdown /p",
+      "desktop": false,
+      "build": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+<!-- url-template: VM_ISO_LINK = https://github.com/reactos/reactos/releases/download/{V}-release/ReactOS-{V}-i386.zip -->
 <!-- arch-label: i386 = i386 (x86 32-bit) -->
 
 > **Note:** ReactOS support is a **tech preview**. Remote command execution

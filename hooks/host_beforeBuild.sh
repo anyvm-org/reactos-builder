@@ -32,7 +32,12 @@ WORK="${VM_WORKDIR:-build}"
 FILES="$(pwd)/files"
 mkdir -p "$WORK"
 
-ZIP="$WORK/reactos-upstream.zip"
+# Version-scoped ON PURPOSE. With a bare "reactos-upstream.zip" the
+# "already downloaded?" check below matches a zip left over from a
+# DIFFERENT release, and the build then installs the wrong media while
+# reporting success. Keep the release in the name so each one caches
+# separately.
+ZIP="$WORK/reactos-upstream-${VM_RELEASE}.zip"
 UNPACK="$WORK/upstream"
 OUT_ISO="$WORK/${VM_OS_NAME}.iso"
 
@@ -93,30 +98,94 @@ fi
 SRC_ISO="${ISOS[0]}"
 echo "upstream bootcd: $SRC_ISO"
 
-echo "=== reactos beforeBuild: remastering with unattend.inf ==="
+echo "=== reactos beforeBuild: remastering the install media ==="
+# WHERE the answer file goes depends on the media layout, and upstream
+# changed it in 0.4.16:
+#
+#   0.4.15 and earlier -- separate bootcd and livecd images. The bootcd
+#     carries the text-mode installer and reads its answer file from
+#     \reactos\unattend.inf.
+#
+#   0.4.16 and later -- ONE combined image. \reactos\ is now the LiveCD
+#     system tree (explorer.exe, system32, ...) and the text-mode install
+#     source moved to \i386\ (txtsetup.sif, reactos.cab, unattend.inf).
+#     Writing \reactos\unattend.inf on that media patches the LIVE
+#     environment's copy, which setup never reads, so the install would sit
+#     on the interactive first page until the wait times out.
+#
+# Detect the layout from the media itself rather than from VM_RELEASE, so a
+# future release that moves things again fails loudly here instead of
+# silently producing an ISO that boots to the wrong thing.
+if [ -n "$(xorriso -indev "$SRC_ISO" -lsl /i386/txtsetup.sif 2>/dev/null | grep -i 'txtsetup\.sif' || true)" ]; then
+    LAYOUT="combined"
+    UNATTEND_ON_ISO="/i386/unattend.inf"
+elif [ -n "$(xorriso -indev "$SRC_ISO" -lsl /reactos/unattend.inf 2>/dev/null | grep -i 'unattend\.inf' || true)" ]; then
+    LAYOUT="bootcd"
+    UNATTEND_ON_ISO="/reactos/unattend.inf"
+else
+    echo "FATAL: $SRC_ISO matches neither known ReactOS media layout" >&2
+    echo "  expected /i386/txtsetup.sif (0.4.16+) or /reactos/unattend.inf (<= 0.4.15)" >&2
+    exit 1
+fi
+echo "media layout: $LAYOUT -> answer file at $UNATTEND_ON_ISO"
+
+# The combined image also boots the wrong entry by default: its
+# /freeldr.ini ships "DefaultOS=LiveImg" with a 3 second menu, so an
+# unattended run would boot the Live environment and never start setup.
+# Point it at the Setup entry (that name comes from the [Operating Systems]
+# section on the media itself) and drop the menu delay.
+FREELDR_MAP=()
+if [ "$LAYOUT" = "combined" ]; then
+    xorriso -osirrox on -indev "$SRC_ISO" \
+            -extract /freeldr.ini "$WORK/freeldr.ini" >/dev/null
+    if ! grep -qE '^Setup=' "$WORK/freeldr.ini"; then
+        echo "FATAL: no Setup entry in the media's freeldr.ini" >&2
+        sed -n '1,40p' "$WORK/freeldr.ini" >&2
+        exit 1
+    fi
+    sed -i -e 's/^DefaultOS=.*/DefaultOS=Setup/' \
+           -e 's/^TimeOut=.*/TimeOut=0/' "$WORK/freeldr.ini"
+    echo "--- patched freeldr.ini ---"
+    grep -E '^(DefaultOS|TimeOut)=' "$WORK/freeldr.ini"
+    FREELDR_MAP=(-map "$WORK/freeldr.ini" /freeldr.ini)
+fi
+
 # "-boot_image any replay" carries the El Torito boot record from the input
 # image over to the output unchanged. Extracting and re-authoring the tree
-# instead would mean reconstructing ReactOS's boot catalog by hand, which
-# is exactly the kind of thing that produces an ISO that looks fine and
-# does not boot.
+# instead would mean reconstructing ReactOS's boot catalog by hand, which is
+# exactly the kind of thing that produces an ISO that looks fine and does
+# not boot.
 rm -f "$OUT_ISO"
 xorriso -indev "$SRC_ISO" -outdev "$OUT_ISO" \
         -boot_image any replay \
-        -map "$FILES/unattend.inf" /reactos/unattend.inf \
+        -map "$FILES/unattend.inf" "$UNATTEND_ON_ISO" \
+        "${FREELDR_MAP[@]}" \
         -commit
 
-# Prove the file actually landed -- a silently dropped -map would give a
+# Prove the files actually landed -- a silently dropped -map would give a
 # perfectly bootable ISO that then sits on the interactive first page of
 # setup until the login wait times out.
-echo "--- verifying /reactos/unattend.inf on the remastered image ---"
-xorriso -indev "$OUT_ISO" -lsl /reactos/unattend.inf
+echo "--- verifying $UNATTEND_ON_ISO on the remastered image ---"
+xorriso -indev "$OUT_ISO" -lsl "$UNATTEND_ON_ISO"
 xorriso -osirrox on -indev "$OUT_ISO" \
-        -extract /reactos/unattend.inf "$WORK/unattend.check.inf" >/dev/null
+        -extract "$UNATTEND_ON_ISO" "$WORK/unattend.check.inf" >/dev/null
 if ! cmp -s "$FILES/unattend.inf" "$WORK/unattend.check.inf"; then
     echo "FATAL: unattend.inf on the remastered ISO does not match the source" >&2
     exit 1
 fi
 rm -f "$WORK/unattend.check.inf"
+
+if [ "$LAYOUT" = "combined" ]; then
+    echo "--- verifying /freeldr.ini on the remastered image ---"
+    xorriso -osirrox on -indev "$OUT_ISO" \
+            -extract /freeldr.ini "$WORK/freeldr.check.ini" >/dev/null
+    if ! grep -qE '^DefaultOS=Setup$' "$WORK/freeldr.check.ini"; then
+        echo "FATAL: remastered ISO does not default to the Setup entry" >&2
+        grep -E '^(DefaultOS|TimeOut)=' "$WORK/freeldr.check.ini" >&2
+        exit 1
+    fi
+        rm -f "$WORK/freeldr.check.ini"
+fi
 
 ls -lh "$OUT_ISO"
 echo "=== reactos beforeBuild: done ==="
